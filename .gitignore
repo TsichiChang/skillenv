@@ -1,2 +1,5 @@
 .claude/
 .skillenv/
+skills/
+.skillsrc
+.envrc
