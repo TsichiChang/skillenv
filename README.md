@@ -12,6 +12,10 @@
 
 > 请阅读 https://raw.githubusercontent.com/TsichiChang/skillenv/main/README.md，按其中「Agent 安装指引」一节在我的机器上安装 skillenv，完成后执行验证步骤并汇报结果。
 
+安装完成后，若想让 Agent 把机器上已有的 skill 也管理起来，再发：
+
+> 按照 skillenv README 中「Agent 接管指引」一节，盘点我本地已安装的所有 skill，给出分类建议，经我确认后完成迁移和各仓库配置。
+
 或者手动安装：
 
 ```bash
@@ -70,6 +74,30 @@ skillenv allow && direnv allow
 
 **Agent 必须遵守的安全规则**：`skillenv allow` 和 `direnv allow` 是信任门。执行前必须把 `.skillsrc`（和非模板生成的 `.envrc`）的完整内容展示给用户并获得确认——尤其是仓库自带、来源不明的清单。不要静默 allow。
 
+## Agent 接管指引：盘点并管理已有 skill
+
+> 本节写给 AI Agent：用户要求"把本地已安装的 skill 用 skillenv 管理起来"时，按以下流程执行。
+
+**步骤 1 — 盘点**：在用户的常用仓库目录下运行 `skillenv scan`，得到全局（claude/codex/agents/opencode）与项目级 skill 的完整清单及各自的 description；另读取 `~/.claude/plugins/installed_plugins.json` 了解插件及其 scope。对 description 缺失或截断的 skill，读它的 `SKILL.md` 补全理解。
+
+**步骤 2 — 分类并请用户确认**：把每个 skill 归入三类，以表格形式向用户呈现建议，**必须经用户确认后才能动手**：
+
+- **通用 → 保留全局**：任何仓库都可能用到的（文档处理、通用工作流类）；
+- **领域性 → 移入中央库，按仓库启用**：绑定某业务域/某类项目的（判断依据：description 中出现特定业务、框架、团队名）。中央库默认建议 `~/.skillenv/store/`，用户要团队共享则用 git 仓库；
+- **已就位 → 不动**：已在各仓库 `.claude/skills/` 等目录的手写项目级 skill。
+
+**步骤 3 — 迁移（硬性规则）**：
+
+- **只 `mv` 不 `rm`**：领域性 skill 移入中央库；重复副本、被淘汰的目录一律移到 `~/.skillenv/backup/`，永不删除；
+- Claude 插件 skillenv 管不了：需要按仓库关闭时，写该仓库 `.claude/settings.local.json` 的 `enabledPlugins`（已有文件只合并不覆盖）；
+- 含公司内部信息的 skill 绝不能提交/推送到公开仓库。
+
+**步骤 4 — 铺仓库配置**：为用户指定的每个仓库生成 `.skillsrc`（领域 skill 用 `skill <中央库路径>` 启用；要屏蔽的全局 skill 用 `disable`；需要完全纯净则 `isolation strict`）和 `.envrc`。含机器绝对路径的 `.skillsrc` 不要提交——git 仓库中加入 `.git/info/exclude`。
+
+**步骤 5 — 信任与激活**：逐仓库向用户展示 `.skillsrc` 内容，确认后执行 `skillenv allow` 与 `direnv allow`，再运行 `skillenv activate` 完成首次物化。
+
+**步骤 6 — 验证并汇报**：抽查一个启用仓库（skill 已物化到 `.claude/skills/` 等目录）和一个屏蔽仓库（`direnv export zsh` 输出 `CLAUDE_CONFIG_DIR`/`CODEX_HOME`，shadow 的 `skills/` 内容符合预期），然后向用户汇报最终布局：全局剩什么、中央库有什么、每个仓库启用/屏蔽了什么、备份在哪。
+
 ## 原理
 
 ```
@@ -110,6 +138,7 @@ disable some-global-skill
 | `skillenv allow` | 信任当前 `.skillsrc`（哈希记录在 `~/.skillenv/trust/`） |
 | `skillenv activate` | 同步 skill 并输出 env export（由 `.envrc` 调用，也可手动跑） |
 | `skillenv status` | 查看信任状态、生效模式与当前环境 |
+| `skillenv scan` | 盘点本机所有已安装的 skill（全局 + 当前仓库项目级，含托管标记与描述） |
 | `skillenv update` | 升级 skillenv 本体（git 安装则 `git pull`，curl 安装则重新下载） |
 
 ## 安全模型

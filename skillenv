@@ -7,6 +7,7 @@
 #   skillenv allow      trust the current .skillsrc (required after every change)
 #   skillenv activate   sync skills and print env exports (called from .envrc)
 #   skillenv status     show trust state and what is active
+#   skillenv scan       inventory every skill installed on this machine
 #   skillenv update     pull the latest skillenv (git checkout or re-download)
 #
 set -euo pipefail
@@ -225,6 +226,26 @@ EOF
   note "  .claude/skills/ .codex/skills/ .opencode/skills/ .agents/skills/"
 }
 
+cmd_scan() { # inventory: location, name, [skillenv]-managed flag, description
+  local loc dir sk name flag desc
+  for loc in "claude-global:$HOME/.claude/skills"   "codex-global:$HOME/.codex/skills" \
+             "agents-global:$HOME/.agents/skills"   "opencode-global:$HOME/.config/opencode/skills" \
+             "claude-project:.claude/skills"        "codex-project:.codex/skills" \
+             "agents-project:.agents/skills"        "opencode-project:.opencode/skills"; do
+    dir=${loc#*:}
+    [ -d "$dir" ] || continue
+    for sk in "$dir"/*/; do
+      [ -f "${sk}SKILL.md" ] || continue
+      name=$(basename "$sk")
+      flag=" "; [ -f "${sk}$MARKER" ] && flag="*"
+      desc=$(grep -m1 '^description:' "${sk}SKILL.md" | cut -c14-110)
+      printf '%-17s %s %-28s %s\n' "${loc%%:*}" "$flag" "$name" "$desc"
+    done
+  done
+  note "* = managed by skillenv; project rows are relative to $PWD"
+  note "Claude plugins are not listed — see ~/.claude/plugins/installed_plugins.json"
+}
+
 cmd_update() {
   local self dir tmp
   self=$(readlink -f "$0")
@@ -246,6 +267,7 @@ case "${1:-help}" in
   allow)         cmd_allow ;;
   activate|sync) cmd_activate ;;
   status)        cmd_status ;;
+  scan)          cmd_scan ;;
   update)        cmd_update ;;
-  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
