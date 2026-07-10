@@ -74,6 +74,13 @@ is_trusted() { [ -f "$(trust_file)" ] && [ "$(cat "$(trust_file)")" = "$(hash_fi
 cmd_allow() {
   [ -f "$MANIFEST" ] || die "no $MANIFEST in $PWD"
   parse_manifest # fail fast on syntax errors before trusting
+  local s abs=""
+  for s in $SKILLS; do case "$s" in /*) abs="$abs $s" ;; esac; done
+  if [ -n "$abs" ] && git ls-files --error-unmatch "$MANIFEST" >/dev/null 2>&1; then
+    note "warning: $MANIFEST is tracked by git but points at machine-local absolute paths:"
+    note "   $abs"
+    note "  these resolve only on this machine — use github: sources in shared manifests"
+  fi
   mkdir -p "$SKILLENV_HOME/trust"
   hash_file "$MANIFEST" > "$(trust_file)"
   note "trusted $PWD/$MANIFEST — re-enter the directory or run 'direnv reload'"
@@ -116,7 +123,24 @@ agent_dir() {
 }
 
 sync_project() {
-  local agent dir d name s src dest
+  local agent dir d name s src dest resolved=""
+  # resolve every source once (not per agent): an unreachable source (private
+  # repo, someone else's absolute path) warns once and skips, without breaking
+  # activation for everything else
+  for s in $SKILLS; do
+    if ! src=$(resolve_source "$s"); then
+      note "warning: cannot fetch $s — skipped"; continue
+    fi
+    if [ ! -f "$src/SKILL.md" ]; then
+      case "$s" in
+        /*) note "warning: $s not found on this machine — absolute paths only resolve where they were written; shared manifests should use github: sources. skipped" ;;
+        *)  note "warning: no SKILL.md at $s — skipped" ;;
+      esac
+      continue
+    fi
+    resolved="$resolved$s|$src
+"
+  done
   for agent in $AGENTS; do
     dir=$(agent_dir "$agent")
     mkdir -p "$dir"
@@ -125,12 +149,9 @@ sync_project() {
       name=${d%/}; name=${name##*/}
       in_manifest "$name" || { rm -rf "$d"; note "removed $dir/$name"; }
     done
-    for s in $SKILLS; do
-      # a source you cannot reach (private repo, someone else's local path) skips
-      # with a warning instead of breaking activation for everything else
-      src=$(resolve_source "$s") || { note "warning: cannot fetch $s — skipped"; continue; }
+    while IFS='|' read -r s src; do
+      [ -n "$s" ] || continue
       name=$(skill_name "$s")
-      [ -f "$src/SKILL.md" ] || { note "warning: no SKILL.md at $s — skipped"; continue; }
       dest="$dir/$name"
       if [ -e "$dest" ] && [ ! -f "$dest/$MARKER" ]; then
         note "skip $dest — exists but not managed by skillenv"
@@ -144,7 +165,7 @@ sync_project() {
       cp -R "$src" "$dest"
       rm -rf "$dest/.git"
       touch "$dest/$MARKER"
-    done
+    done <<< "$resolved"
   done
 }
 
