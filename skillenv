@@ -126,9 +126,11 @@ sync_project() {
       in_manifest "$name" || { rm -rf "$d"; note "removed $dir/$name"; }
     done
     for s in $SKILLS; do
-      src=$(resolve_source "$s")
+      # a source you cannot reach (private repo, someone else's local path) skips
+      # with a warning instead of breaking activation for everything else
+      src=$(resolve_source "$s") || { note "warning: cannot fetch $s — skipped"; continue; }
       name=$(skill_name "$s")
-      [ -f "$src/SKILL.md" ] || die "no SKILL.md at $s"
+      [ -f "$src/SKILL.md" ] || { note "warning: no SKILL.md at $s — skipped"; continue; }
       dest="$dir/$name"
       if [ -e "$dest" ] && [ ! -f "$dest/$MARKER" ]; then
         note "skip $dest — exists but not managed by skillenv"
