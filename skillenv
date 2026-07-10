@@ -100,7 +100,12 @@ agent_dir() {
     codex)    echo ".codex/skills" ;;
     opencode) echo ".opencode/skills" ;;
     agents)   echo ".agents/skills" ;;
-    *) die "unknown agent '$1' (known: claude codex opencode agents)" ;;
+    cursor)   echo ".cursor/skills" ;;
+    gemini)   echo ".gemini/skills" ;;
+    copilot)  echo ".github/skills" ;;
+    goose)    echo ".goose/skills" ;;
+    amp)      echo ".amp/skills" ;;
+    *) die "unknown agent '$1' (known: claude codex opencode agents cursor gemini copilot goose amp)" ;;
   esac
 }
 
