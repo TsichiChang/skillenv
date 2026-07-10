@@ -49,6 +49,16 @@ parse_manifest() {
   done < "$MANIFEST"
   set +f
   case "$ISOLATION" in merge|strict) ;; *) die "isolation must be 'merge' or 'strict'" ;; esac
+  [ "$AGENTS" = "auto" ] && AGENTS=$(detect_agents)
+  true
+}
+
+detect_agents() { # which supported agents are actually installed on this machine
+  local found=""
+  { [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; }          && found="$found claude"
+  { [ -d "$HOME/.codex" ] || command -v codex >/dev/null 2>&1; }            && found="$found codex"
+  { [ -d "$HOME/.config/opencode" ] || command -v opencode >/dev/null 2>&1; } && found="$found opencode"
+  echo "${found# }"
 }
 
 skill_name()  { local s=${1#github:}; s=${s%@*}; basename "$s"; }
@@ -209,7 +219,8 @@ cmd_init() {
     cat > "$MANIFEST" <<'EOF'
 # skillenv manifest — one directive per line
 #
-#   agents claude codex opencode    # which agents to manage (default: claude codex)
+#   agents auto                     # manage whichever of claude/codex/opencode is installed
+#   agents claude codex opencode    # ...or list explicitly (default: claude codex)
 #   isolation strict                # strict = hide ALL global skills; merge = globals + repo (default)
 #   skill github:owner/repo/path/to/skill@ref
 #   skill ./skills/my-local-skill

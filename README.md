@@ -115,8 +115,9 @@ skillenv allow && direnv allow
 ## .skillsrc 参考
 
 ```bash
-# 管理哪些 agent 的目录（默认 claude codex；agents = 通用 .agents/skills）
-agents claude codex opencode
+# 管理哪些 agent：auto = 检测本机装了哪些（推荐——后续新装 agent 进目录即自动纳管）
+# 也可显式指定：claude / codex / opencode / agents（通用 .agents/skills）；默认 claude codex
+agents auto
 
 # merge（默认）：全局 skill + 仓库 skill 叠加
 # strict：屏蔽所有全局 skill，只保留 manifest 声明的
