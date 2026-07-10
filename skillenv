@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+#
+# skillenv — pyenv for agent skills.
+# Declare skills per-repo in .skillsrc; direnv activates them on cd.
+#
+#   skillenv init       scaffold .skillsrc + .envrc in the current repo
+#   skillenv allow      trust the current .skillsrc (required after every change)
+#   skillenv activate   sync skills and print env exports (called from .envrc)
+#   skillenv status     show trust state and what is active
+#
+set -euo pipefail
+
+SKILLENV_HOME="${SKILLENV_HOME:-$HOME/.skillenv}"
+MANIFEST=".skillsrc"
+MARKER=".managed-by-skillenv"
+
+if command -v shasum >/dev/null 2>&1; then SHA="shasum -a 256"; else SHA="sha256sum"; fi
+
+note() { echo "skillenv: $*" >&2; }
+die()  { note "$*"; exit 1; }
+
+hash_str()  { printf %s "$1" | $SHA | awk '{print substr($1,1,12)}'; }
+hash_file() { $SHA < "$1" | awk '{print $1}'; }
+
+# ---------- manifest ----------
+
+AGENTS="claude codex"
+ISOLATION="merge"
+SKILLS=""
+DISABLES=""
+
+parse_manifest() {
+  set -f
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    # shellcheck disable=SC2086
+    set -- $line
+    [ "$#" -eq 0 ] && continue
+    directive=$1; shift
+    case "$directive" in
+      agents)    AGENTS="$*" ;;
+      isolation) ISOLATION="$1" ;;
+      skill)     SKILLS="$SKILLS $1" ;;
+      disable)   DISABLES="$DISABLES $1" ;;
+      *) die "unknown directive '$directive' in $MANIFEST" ;;
+    esac
+  done < "$MANIFEST"
+  set +f
+  case "$ISOLATION" in merge|strict) ;; *) die "isolation must be 'merge' or 'strict'" ;; esac
+}
+
+skill_name()  { local s=${1#github:}; s=${s%@*}; basename "$s"; }
+is_disabled() { local d; for d in $DISABLES; do [ "$d" = "$1" ] && return 0; done; return 1; }
+in_manifest() { local s; for s in $SKILLS; do [ "$(skill_name "$s")" = "$1" ] && return 0; done; return 1; }
+
+# ---------- trust gate (same model as `direnv allow`) ----------
+
+trust_file() { echo "$SKILLENV_HOME/trust/$(hash_str "$PWD/$MANIFEST")"; }
+is_trusted() { [ -f "$(trust_file)" ] && [ "$(cat "$(trust_file)")" = "$(hash_file "$MANIFEST")" ]; }
+
+cmd_allow() {
+  [ -f "$MANIFEST" ] || die "no $MANIFEST in $PWD"
+  parse_manifest # fail fast on syntax errors before trusting
+  mkdir -p "$SKILLENV_HOME/trust"
+  hash_file "$MANIFEST" > "$(trust_file)"
+  note "trusted $PWD/$MANIFEST — re-enter the directory or run 'direnv reload'"
+}
+
+# ---------- skill sources ----------
+
+fetch_github() { # owner/repo[/sub/dir][@ref] -> echoes skill dir
+  local spec=$1 ref="" sub="" owner repo rest cache
+  case "$spec" in *@*) ref=${spec##*@}; spec=${spec%@*} ;; esac
+  owner=${spec%%/*}; rest=${spec#*/}; repo=${rest%%/*}
+  case "$rest" in */*) sub=${rest#*/} ;; esac
+  cache="$SKILLENV_HOME/cache/github/$owner/${repo}${ref:+@$ref}"
+  if [ ! -d "$cache/.git" ]; then
+    note "fetching github.com/$owner/$repo${ref:+ ($ref)}"
+    git clone --quiet --depth 1 ${ref:+--branch "$ref"} \
+      "https://github.com/$owner/$repo.git" "$cache" >&2
+  fi
+  echo "$cache${sub:+/$sub}"
+}
+
+resolve_source() {
+  case "$1" in
+    github:*)    fetch_github "${1#github:}" ;;
+    ./*|../*|/*) echo "$1" ;;
+    *) die "unsupported skill source: $1 (use github:owner/repo[/dir][@ref] or a local path)" ;;
+  esac
+}
+
+# ---------- materialize into the repo ----------
+
+agent_dir() {
+  case "$1" in
+    claude)   echo ".claude/skills" ;;
+    codex)    echo ".codex/skills" ;;
+    opencode) echo ".opencode/skills" ;;
+    agents)   echo ".agents/skills" ;;
+    *) die "unknown agent '$1' (known: claude codex opencode agents)" ;;
+  esac
+}
+
+sync_project() {
+  local agent dir d name s src dest
+  for agent in $AGENTS; do
+    dir=$(agent_dir "$agent")
+    mkdir -p "$dir"
+    for d in "$dir"/*/; do # drop managed skills gone from the manifest
+      [ -f "$d$MARKER" ] || continue
+      name=$(basename "$d")
+      in_manifest "$name" || { rm -rf "$d"; note "removed $dir/$name"; }
+    done
+    for s in $SKILLS; do
+      src=$(resolve_source "$s")
+      name=$(skill_name "$s")
+      [ -f "$src/SKILL.md" ] || die "no SKILL.md at $s"
+      dest="$dir/$name"
+      if [ -e "$dest" ] && [ ! -f "$dest/$MARKER" ]; then
+        note "skip $dest — exists but not managed by skillenv"
+        continue
+      fi
+      rm -rf "$dest"
+      cp -R "$src" "$dest"
+      rm -rf "$dest/.git"
+      touch "$dest/$MARKER"
+    done
+  done
+}
+
+# ---------- shadow config dirs (global-skill isolation) ----------
+#
+# A shadow of ~/.claude or ~/.codex: every entry symlinked back to the real
+# one (auth, settings, sessions stay shared) EXCEPT skills/, which we control:
+#   strict -> empty; merge -> symlinks to each global skill minus `disable`d ones.
+# Exported per-process via CLAUDE_CONFIG_DIR / CODEX_HOME, so other terminals
+# and other repos are untouched, and leaving the directory restores everything.
+
+need_shadow() { [ "$ISOLATION" = strict ] || [ -n "${DISABLES// /}" ]; }
+
+build_shadow() { # $1 agent, $2 real config dir -> echoes shadow dir
+  local agent=$1 real=$2 shadow entry base sk name
+  shadow="$SKILLENV_HOME/shadow/$(hash_str "$PWD")/$agent"
+  mkdir -p "$shadow"
+  for entry in "$real"/* "$real"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    base=$(basename "$entry")
+    [ "$base" = "skills" ] && continue
+    [ -e "$shadow/$base" ] && [ ! -L "$shadow/$base" ] && continue # agent wrote real state here; keep it
+    ln -sfn "$entry" "$shadow/$base"
+  done
+  if [ "$agent" = claude ] && [ -f "$HOME/.claude.json" ]; then
+    # lives outside ~/.claude, but claude looks for it inside CLAUDE_CONFIG_DIR
+    ln -sfn "$HOME/.claude.json" "$shadow/.claude.json"
+  fi
+  rm -rf "$shadow/skills"
+  mkdir -p "$shadow/skills"
+  if [ "$ISOLATION" = merge ]; then
+    for sk in "$real"/skills/*/; do
+      [ -d "$sk" ] || continue
+      name=$(basename "$sk")
+      is_disabled "$name" || ln -s "${sk%/}" "$shadow/skills/$name"
+    done
+  fi
+  echo "$shadow"
+}
+
+# ---------- commands ----------
+
+cmd_activate() {
+  local agent shadow
+  if [ ! -f "$MANIFEST" ]; then note "no $MANIFEST in $PWD — nothing to do"; return 0; fi
+  if ! is_trusted; then
+    note "$MANIFEST is new or has changed and is NOT trusted."
+    note "review it, then run: skillenv allow"
+    return 0
+  fi
+  parse_manifest
+  sync_project
+  if need_shadow; then
+    for agent in $AGENTS; do
+      case "$agent" in
+        claude) shadow=$(build_shadow claude "$HOME/.claude"); echo "export CLAUDE_CONFIG_DIR='$shadow'" ;;
+        codex)  shadow=$(build_shadow codex "$HOME/.codex");   echo "export CODEX_HOME='$shadow'" ;;
+        opencode) note "opencode: global skills cannot be masked (it also reads ~/.claude/skills and ~/.agents/skills)" ;;
+      esac
+    done
+  fi
+  note "active — isolation=$ISOLATION agents=[$AGENTS] skills=[${SKILLS# }] disabled=[${DISABLES# }]"
+}
+
+cmd_status() {
+  [ -f "$MANIFEST" ] || die "no $MANIFEST in $PWD"
+  if is_trusted; then echo "trust:     allowed"; else echo "trust:     NOT allowed (run: skillenv allow)"; fi
+  parse_manifest
+  echo "isolation: $ISOLATION"
+  echo "agents:    $AGENTS"
+  echo "skills:   ${SKILLS:- (none)}"
+  echo "disabled: ${DISABLES:- (none)}"
+  echo "shadow:    $SKILLENV_HOME/shadow/$(hash_str "$PWD")"
+  echo "env:       CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-<unset>} CODEX_HOME=${CODEX_HOME:-<unset>}"
+}
+
+cmd_init() {
+  if [ ! -f "$MANIFEST" ]; then
+    cat > "$MANIFEST" <<'EOF'
+# skillenv manifest — one directive per line
+#
+#   agents claude codex opencode    # which agents to manage (default: claude codex)
+#   isolation strict                # strict = hide ALL global skills; merge = globals + repo (default)
+#   skill github:owner/repo/path/to/skill@ref
+#   skill ./skills/my-local-skill
+#   disable name-of-a-global-skill  # hide one global skill (works in merge mode)
+EOF
+    note "created $MANIFEST"
+  fi
+  if [ ! -f .envrc ] || ! grep -q "skillenv activate" .envrc; then
+    printf 'watch_file %s\neval "$(skillenv activate)"\n' "$MANIFEST" >> .envrc
+    note "wrote .envrc"
+  fi
+  note "next: edit $MANIFEST, then run: skillenv allow && direnv allow"
+  note "if you do not want materialized skills in git, add to .gitignore:"
+  note "  .claude/skills/ .codex/skills/ .opencode/skills/ .agents/skills/"
+}
+
+case "${1:-help}" in
+  init)          cmd_init ;;
+  allow)         cmd_allow ;;
+  activate|sync) cmd_activate ;;
+  status)        cmd_status ;;
+  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac
