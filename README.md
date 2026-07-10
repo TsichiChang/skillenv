@@ -24,7 +24,7 @@
 ## 安装
 
 ```bash
-git clone <this-repo> && ln -s "$PWD/skillenv/skillenv" /usr/local/bin/skillenv
+git clone https://github.com/TsichiChang/skillenv.git && ln -s "$PWD/skillenv/skillenv" /usr/local/bin/skillenv
 # 并确保已安装 direnv 且 hook 进了 shell：https://direnv.net/docs/hook.html
 ```
 
