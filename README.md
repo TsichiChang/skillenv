@@ -116,7 +116,6 @@ skillenv allow && direnv allow
 
 ```bash
 # 管理哪些 agent 的目录（默认 claude codex；agents = 通用 .agents/skills）
-# 可选：claude codex opencode agents cursor gemini copilot goose amp
 agents claude codex opencode
 
 # merge（默认）：全局 skill + 仓库 skill 叠加
