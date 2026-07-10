@@ -15,9 +15,12 @@
 或者手动安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TsichiChang/skillenv/main/skillenv -o /usr/local/bin/skillenv && chmod +x /usr/local/bin/skillenv
+git clone https://github.com/TsichiChang/skillenv.git ~/.skillenv/repo
+ln -s ~/.skillenv/repo/skillenv /usr/local/bin/skillenv
 brew install direnv && echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc && source ~/.zshrc
 ```
+
+之后升级只需 `skillenv update`（等价于在安装仓库里 `git pull`，symlink 安装下即时生效）。
 
 ## Agent 安装指引
 
@@ -25,13 +28,15 @@ brew install direnv && echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc && source ~/
 
 **步骤 1 — 选择 bin 目录**：按顺序取第一个存在且可写的目录：`/opt/homebrew/bin`（Apple Silicon）→ `/usr/local/bin` → `~/.local/bin`（若用此项，需确认其在 PATH 中，不在则追加到 shell rc）。下文称 `$BIN`。
 
-**步骤 2 — 安装 skillenv**（单文件，无需 clone）：
+**步骤 2 — 安装 skillenv**（git clone + symlink，保证后续可用 `skillenv update` 升级）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TsichiChang/skillenv/main/skillenv -o "$BIN/skillenv"
-chmod +x "$BIN/skillenv"
+git clone https://github.com/TsichiChang/skillenv.git ~/.skillenv/repo
+ln -s ~/.skillenv/repo/skillenv "$BIN/skillenv"
 skillenv help   # 应输出用法说明
 ```
+
+若 `~/.skillenv/repo` 已存在，改为 `git -C ~/.skillenv/repo pull` 更新后重建 symlink。若环境无法 git clone GitHub，才退化为 curl 下载单文件（此方式升级需重新下载）。
 
 **步骤 3 — 安装 direnv**：先 `command -v direnv` 检查，已有则跳过。首选 `brew install direnv`；若 brew 不可用、报错或卡住超过 2 分钟（公司网络访问 formulae.brew.sh 可能极慢），改用二进制直装：
 
@@ -105,6 +110,7 @@ disable some-global-skill
 | `skillenv allow` | 信任当前 `.skillsrc`（哈希记录在 `~/.skillenv/trust/`） |
 | `skillenv activate` | 同步 skill 并输出 env export（由 `.envrc` 调用，也可手动跑） |
 | `skillenv status` | 查看信任状态、生效模式与当前环境 |
+| `skillenv update` | 升级 skillenv 本体（git 安装则 `git pull`，curl 安装则重新下载） |
 
 ## 安全模型
 

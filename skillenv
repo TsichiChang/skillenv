@@ -7,6 +7,7 @@
 #   skillenv allow      trust the current .skillsrc (required after every change)
 #   skillenv activate   sync skills and print env exports (called from .envrc)
 #   skillenv status     show trust state and what is active
+#   skillenv update     pull the latest skillenv (git checkout or re-download)
 #
 set -euo pipefail
 
@@ -224,10 +225,27 @@ EOF
   note "  .claude/skills/ .codex/skills/ .opencode/skills/ .agents/skills/"
 }
 
+cmd_update() {
+  local self dir tmp
+  self=$(readlink -f "$0")
+  dir=$(dirname "$self")
+  if [ -d "$dir/.git" ]; then
+    git -C "$dir" pull --ff-only >&2
+    note "now at $(git -C "$dir" log -1 --format='%h %s')"
+  else
+    note "not a git checkout — re-downloading latest from GitHub"
+    tmp=$(mktemp) \
+      && curl -fsSL https://raw.githubusercontent.com/TsichiChang/skillenv/main/skillenv -o "$tmp" \
+      && chmod +x "$tmp" && mv "$tmp" "$self" \
+      && note "updated $self"
+  fi
+}
+
 case "${1:-help}" in
   init)          cmd_init ;;
   allow)         cmd_allow ;;
   activate|sync) cmd_activate ;;
   status)        cmd_status ;;
-  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+  update)        cmd_update ;;
+  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
