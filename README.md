@@ -168,7 +168,21 @@ style = "bold cyan"
 format = "[$symbol $output]($style) "
 ```
 
-其他框架同理：任何能执行命令的 prompt 段（powerlevel10k custom segment、zsh `precmd` 拼 `RPROMPT`）调 `skillenv prompt` 即可，单次执行约 70ms。
+powerlevel10k 用户在 `~/.p10k.zsh` 中加 custom segment：
+
+```zsh
+function prompt_skillenv() {
+  local out
+  out=$(skillenv prompt 2>/dev/null) || return
+  [[ -n $out ]] || return
+  p10k segment -f cyan -i '⛭' -t "$out"
+}
+# 再把 skillenv 加进 POWERLEVEL9K_LEFT_PROMPT_ELEMENTS 或 RIGHT_PROMPT_ELEMENTS
+```
+
+其他框架同理：任何能执行命令的 prompt 段（zsh `precmd` 拼 `RPROMPT`、oh-my-posh custom segment）调 `skillenv prompt` 即可，单次执行约 70ms。
+
+输出状态一览：空（无 `.skillsrc`）、`merge -4`（merge 模式、屏蔽 4 个）、`strict +2`（strict 模式、声明 2 个）、`!untrusted`（清单变更待 `skillenv allow` 确认）。注意 prompt 反映的是 skillenv 的信任门状态；`.envrc` 未 `direnv allow` 时环境不会加载，但 prompt 仍按 `.skillsrc` 显示。
 
 ## 安全模型
 
