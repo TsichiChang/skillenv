@@ -8,6 +8,7 @@
 #   skillenv activate   sync skills and print env exports (called from .envrc)
 #   skillenv status     show trust state and what is active
 #   skillenv scan       inventory every skill installed on this machine
+#   skillenv prompt     compact status for shell prompts (starship/p10k)
 #   skillenv update     pull the latest skillenv (git checkout or re-download)
 #
 set -euo pipefail
@@ -195,11 +196,19 @@ cmd_activate() {
       case "$agent" in
         claude) shadow=$(build_shadow claude "$HOME/.claude"); echo "export CLAUDE_CONFIG_DIR='$shadow'" ;;
         codex)  shadow=$(build_shadow codex "$HOME/.codex");   echo "export CODEX_HOME='$shadow'" ;;
-        opencode) note "opencode: global skills cannot be masked (it also reads ~/.claude/skills and ~/.agents/skills)" ;;
       esac
     done
   fi
-  note "active — isolation=$ISOLATION agents=[$AGENTS] skills=[${SKILLS# }] disabled=[${DISABLES# }]"
+}
+
+cmd_prompt() { # compact status for shell prompts; prints nothing without a manifest
+  [ -f "$MANIFEST" ] || return 0
+  if ! is_trusted; then printf '!untrusted'; return 0; fi
+  parse_manifest
+  local out=$ISOLATION n
+  n=$(echo $SKILLS | wc -w | tr -d ' ');   [ "$n" -gt 0 ] && out="$out +$n"
+  n=$(echo $DISABLES | wc -w | tr -d ' '); [ "$n" -gt 0 ] && out="$out -$n"
+  printf '%s' "$out"
 }
 
 cmd_status() {
@@ -279,6 +288,7 @@ case "${1:-help}" in
   activate|sync) cmd_activate ;;
   status)        cmd_status ;;
   scan)          cmd_scan ;;
+  prompt)        cmd_prompt ;;
   update)        cmd_update ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

@@ -140,7 +140,35 @@ disable some-global-skill
 | `skillenv activate` | 同步 skill 并输出 env export（由 `.envrc` 调用，也可手动跑） |
 | `skillenv status` | 查看信任状态、生效模式与当前环境 |
 | `skillenv scan` | 盘点本机所有已安装的 skill（全局 + 当前仓库项目级，含托管标记与描述） |
+| `skillenv prompt` | 输出提示符用的紧凑状态（见下节），无 `.skillsrc` 时输出为空 |
 | `skillenv update` | 升级 skillenv 本体（git 安装则 `git pull`，curl 安装则重新下载） |
+
+## 静音与提示符集成
+
+默认 cd 时 direnv 会打印 `loading` / `export +VAR` 行。想完全静音、把状态改放进提示符：
+
+**1. 静音 direnv**——写 `~/.config/direnv/direnv.toml`：
+
+```toml
+[global]
+hide_env_diff = true
+log_filter = "^$"
+```
+
+skillenv 的「.skillsrc 未信任」安全警告走 `.envrc` 的 stderr，不受此过滤影响，仍会正常显示。
+
+**2. 提示符显示状态**——`skillenv prompt` 输出形如 `merge -4`（merge 模式、屏蔽 4 个全局 skill）、`strict +2`（strict 模式、声明 2 个 skill）、`!untrusted`（清单待确认）。starship 用户在 `~/.config/starship.toml` 的 `format` 中加入 `${custom.skillenv}`，并追加：
+
+```toml
+[custom.skillenv]
+command = "skillenv prompt"
+when = "test -f .skillsrc"
+symbol = "⛭"
+style = "bold cyan"
+format = "[$symbol $output]($style) "
+```
+
+其他框架同理：任何能执行命令的 prompt 段（powerlevel10k custom segment、zsh `precmd` 拼 `RPROMPT`）调 `skillenv prompt` 即可，单次执行约 70ms。
 
 ## 安全模型
 
