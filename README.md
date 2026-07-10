@@ -125,11 +125,14 @@ isolation strict
 
 # skill 来源：github 仓库子目录（@ref 为分支或 tag），或本地路径
 skill github:anthropics/skills/document-skills/pdf@main
-skill ./skills/my-local-skill
+skill ./skills/my-local-skill          # 相对路径：相对仓库根，可随仓库提交
+skill /Users/me/store/private-skill    # 绝对路径：仅本机可用，勿提交进 git
 
 # merge 模式下屏蔽某个全局 skill（按目录名）
 disable some-global-skill
 ```
+
+**源不可达时的行为**：某个 skill 拿不到（私有仓库无权限、别人机器的绝对路径）时，activate 会**警告并跳过它**，其余 skill、`disable` 与隔离照常生效；之前已物化的拷贝保留不删。源恢复可达后，下次进目录自动补装，无需任何命令。另外两道针对绝对路径的提醒：`.skillsrc` 被 git 跟踪且含绝对路径源时，`skillenv allow` 会警告"这只在本机可解析"；队友机器上解析失败的警告也会指明根因并建议改用 `github:` 源。
 
 ## 命令
 
