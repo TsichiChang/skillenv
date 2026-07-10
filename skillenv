@@ -62,7 +62,7 @@ detect_agents() { # which supported agents are actually installed on this machin
   echo "${found# }"
 }
 
-skill_name()  { local s=${1#github:}; s=${s%@*}; basename "$s"; }
+skill_name()  { local s=${1#github:}; s=${s%@*}; s=${s%/}; printf '%s' "${s##*/}"; }
 is_disabled() { local d; for d in $DISABLES; do [ "$d" = "$1" ] && return 0; done; return 1; }
 in_manifest() { local s; for s in $SKILLS; do [ "$(skill_name "$s")" = "$1" ] && return 0; done; return 1; }
 
@@ -122,7 +122,7 @@ sync_project() {
     mkdir -p "$dir"
     for d in "$dir"/*/; do # drop managed skills gone from the manifest
       [ -f "$d$MARKER" ] || continue
-      name=$(basename "$d")
+      name=${d%/}; name=${name##*/}
       in_manifest "$name" || { rm -rf "$d"; note "removed $dir/$name"; }
     done
     for s in $SKILLS; do
@@ -132,6 +132,10 @@ sync_project() {
       dest="$dir/$name"
       if [ -e "$dest" ] && [ ! -f "$dest/$MARKER" ]; then
         note "skip $dest — exists but not managed by skillenv"
+        continue
+      fi
+      # already materialized and identical -> skip the copy (keeps repeat cds fast)
+      if [ -f "$dest/$MARKER" ] && diff -rq -x "$MARKER" -x .git "$src" "$dest" >/dev/null 2>&1; then
         continue
       fi
       rm -rf "$dest"
@@ -158,12 +162,13 @@ build_shadow() { # $1 agent, $2 real config dir -> echoes shadow dir
   mkdir -p "$shadow"
   for entry in "$real"/* "$real"/.[!.]*; do
     [ -e "$entry" ] || continue
-    base=$(basename "$entry")
+    base=${entry##*/}
     [ "$base" = "skills" ] && continue
-    [ -e "$shadow/$base" ] && [ ! -L "$shadow/$base" ] && continue # agent wrote real state here; keep it
+    [ -L "$shadow/$base" ] && continue # linked on a previous run; target path never changes
+    [ -e "$shadow/$base" ] && continue # agent wrote real state here; keep it
     ln -sfn "$entry" "$shadow/$base"
   done
-  if [ "$agent" = claude ] && [ -f "$HOME/.claude.json" ]; then
+  if [ "$agent" = claude ] && [ ! -L "$shadow/.claude.json" ] && [ -f "$HOME/.claude.json" ]; then
     # lives outside ~/.claude, but claude looks for it inside CLAUDE_CONFIG_DIR
     ln -sfn "$HOME/.claude.json" "$shadow/.claude.json"
   fi
@@ -172,7 +177,7 @@ build_shadow() { # $1 agent, $2 real config dir -> echoes shadow dir
   if [ "$ISOLATION" = merge ]; then
     for sk in "$real"/skills/*/; do
       [ -d "$sk" ] || continue
-      name=$(basename "$sk")
+      name=${sk%/}; name=${name##*/}
       is_disabled "$name" || ln -s "${sk%/}" "$shadow/skills/$name"
     done
   fi
@@ -205,9 +210,13 @@ cmd_prompt() { # compact status for shell prompts; prints nothing without a mani
   [ -f "$MANIFEST" ] || return 0
   if ! is_trusted; then printf '!untrusted'; return 0; fi
   parse_manifest
-  local out=$ISOLATION n
-  n=$(echo $SKILLS | wc -w | tr -d ' ');   [ "$n" -gt 0 ] && out="$out +$n"
-  n=$(echo $DISABLES | wc -w | tr -d ' '); [ "$n" -gt 0 ] && out="$out -$n"
+  local out=$ISOLATION
+  set -f
+  # shellcheck disable=SC2086
+  set -- $SKILLS;   [ "$#" -gt 0 ] && out="$out +$#"
+  # shellcheck disable=SC2086
+  set -- $DISABLES; [ "$#" -gt 0 ] && out="$out -$#"
+  set +f
   printf '%s' "$out"
 }
 
