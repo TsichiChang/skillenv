@@ -146,8 +146,12 @@ disable some-global-skill
 | `skillenv activate` | 同步 skill 并输出 env export（由 `.envrc` 调用，也可手动跑） |
 | `skillenv status` | 查看信任状态、生效模式与当前环境 |
 | `skillenv scan` | 盘点本机所有已安装的 skill（全局 + 当前仓库项目级，含托管标记与描述） |
+| `skillenv install <源>` | **全局**安装：把 skill 装进每个已检测 agent 的全局目录（源格式同 `skill` 指令） |
+| `skillenv uninstall <名>` | **全局**卸载：从各全局目录移除（移入 `~/.skillenv/backup/`，永不真删） |
 | `skillenv prompt` | 输出提示符用的紧凑状态（见下节），无 `.skillsrc` 时输出为空 |
 | `skillenv update` | 升级 skillenv 本体（git 安装则 `git pull`，curl 安装则重新下载） |
+
+**全局层与仓库层的分工**：仓库层是声明式的（`.skillsrc` 写什么就是什么），全局层是命令式的（`install`/`uninstall` 直接改全局目录）。两层的交互由模式决定：全局装了新 skill，merge 仓库下次 cd 自动可见（shadow 每次重算），strict 仓库不受影响；`disable` 仍可在个别仓库屏蔽全局装的 skill。`install` 不会覆盖手工放置的同名 skill（无托管标记则跳过）；`uninstall` 对任何同名全局 skill 生效，但一律移入备份而非删除。同一 skill 想更新，重跑 `install` 即可（托管标记允许覆盖）。
 
 ## 静音与提示符集成
 

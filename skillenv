@@ -8,6 +8,8 @@
 #   skillenv activate   sync skills and print env exports (called from .envrc)
 #   skillenv status     show trust state and what is active
 #   skillenv scan       inventory every skill installed on this machine
+#   skillenv install    install a skill into every detected agent's GLOBAL dir
+#   skillenv uninstall  move a skill out of the global dirs (backed up, never deleted)
 #   skillenv prompt     compact status for shell prompts (starship/p10k)
 #   skillenv update     pull the latest skillenv (git checkout or re-download)
 #
@@ -325,6 +327,58 @@ cmd_scan() { # inventory: location, name, [skillenv]-managed flag, description
   note "Claude plugins are not listed — see ~/.claude/plugins/installed_plugins.json"
 }
 
+# ---------- global install / uninstall ----------
+# The repo layer is declarative (.skillsrc); the global layer is imperative:
+# install/uninstall write to each detected agent's global skills directory.
+
+agent_global_dir() {
+  case "$1" in
+    claude)   echo "$HOME/.claude/skills" ;;
+    codex)    echo "$HOME/.codex/skills" ;;
+    opencode) echo "$HOME/.config/opencode/skills" ;;
+  esac
+}
+
+cmd_install() { # <source> -> copy into every detected agent's global skills dir
+  local s=${1:-} src name agent dir dest
+  [ -n "$s" ] || die "usage: skillenv install <source>   (github:owner/repo[/dir][@ref], git:<url>, or a local path)"
+  src=$(resolve_source "$s") || die "cannot fetch $s"
+  [ -f "$src/SKILL.md" ] || die "no SKILL.md at $s"
+  name=$(skill_name "$s")
+  for agent in $(detect_agents); do
+    dir=$(agent_global_dir "$agent")
+    mkdir -p "$dir"
+    dest="$dir/$name"
+    if [ -e "$dest" ] && [ ! -f "$dest/$MARKER" ]; then
+      note "skip $dest — exists but not managed by skillenv ('skillenv uninstall $name' first to replace)"
+      continue
+    fi
+    rm -rf "$dest"
+    cp -R "$src" "$dest"
+    rm -rf "$dest/.git"
+    touch "$dest/$MARKER"
+    note "installed $name -> $dest"
+  done
+  note "merge-mode repos pick this up on next cd; strict repos stay unaffected"
+}
+
+cmd_uninstall() { # <name> -> move out of every global dir into ~/.skillenv/backup
+  local name=${1:-} agent dir dest bak n found=""
+  [ -n "$name" ] || die "usage: skillenv uninstall <skill-name>"
+  mkdir -p "$SKILLENV_HOME/backup"
+  for agent in $(detect_agents); do
+    dir=$(agent_global_dir "$agent")
+    dest="$dir/$name"
+    [ -d "$dest" ] || continue
+    n=0; bak="$SKILLENV_HOME/backup/$agent-$name"
+    while [ -e "$bak" ]; do n=$((n + 1)); bak="$SKILLENV_HOME/backup/$agent-$name.$n"; done
+    mv "$dest" "$bak"
+    note "removed $dest (backup: $bak)"
+    found=1
+  done
+  [ -n "$found" ] || note "no global skill named '$name' for detected agents ($(detect_agents))"
+}
+
 cmd_update() {
   local self dir tmp
   self=$(readlink -f "$0")
@@ -347,7 +401,9 @@ case "${1:-help}" in
   activate|sync) cmd_activate ;;
   status)        cmd_status ;;
   scan)          cmd_scan ;;
+  install)       shift; cmd_install "${1:-}" ;;
+  uninstall)     shift; cmd_uninstall "${1:-}" ;;
   prompt)        cmd_prompt ;;
   update)        cmd_update ;;
-  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
