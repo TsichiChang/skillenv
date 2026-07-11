@@ -8,6 +8,7 @@
 #   skillenv activate   sync skills and print env exports (called from .envrc)
 #   skillenv status     show trust state and what is active
 #   skillenv scan       inventory every skill installed on this machine
+#   skillenv list       global skills, grouped by agent
 #   skillenv install    install a skill into every detected agent's GLOBAL dir
 #   skillenv uninstall  move a skill out of the global dirs (backed up, never deleted)
 #   skillenv prompt     compact status for shell prompts (starship/p10k)
@@ -339,6 +340,33 @@ agent_global_dir() {
   esac
 }
 
+list_dir() { # print indented rows for every skill in $1
+  local sk name flag desc any=""
+  for sk in "$1"/*/; do
+    [ -f "${sk}SKILL.md" ] || continue
+    name=${sk%/}; name=${name##*/}
+    flag=" "; [ -f "${sk}$MARKER" ] && flag="*"
+    desc=$(grep -m1 '^description:' "${sk}SKILL.md" | cut -c14-90)
+    printf '  %s %-26s %s\n' "$flag" "$name" "$desc"
+    any=1
+  done
+  [ -n "$any" ] || echo "    (none)"
+}
+
+cmd_list() { # global skills, grouped by agent
+  local agent dir
+  for agent in $(detect_agents); do
+    dir=$(agent_global_dir "$agent")
+    printf '%s (%s)\n' "$agent" "${dir/#$HOME/~}"
+    list_dir "$dir"
+  done
+  if [ -d "$HOME/.agents/skills" ]; then
+    printf 'shared (~/.agents/skills, read by opencode and other Agent-Skills tools)\n'
+    list_dir "$HOME/.agents/skills"
+  fi
+  note "* = managed by skillenv"
+}
+
 cmd_install() { # <source> -> copy into every detected agent's global skills dir
   local s=${1:-} src name agent dir dest
   [ -n "$s" ] || die "usage: skillenv install <source>   (github:owner/repo[/dir][@ref], git:<url>, or a local path)"
@@ -401,9 +429,10 @@ case "${1:-help}" in
   activate|sync) cmd_activate ;;
   status)        cmd_status ;;
   scan)          cmd_scan ;;
+  list)          cmd_list ;;
   install)       shift; cmd_install "${1:-}" ;;
   uninstall)     shift; cmd_uninstall "${1:-}" ;;
   prompt)        cmd_prompt ;;
   update)        cmd_update ;;
-  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
