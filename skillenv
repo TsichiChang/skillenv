@@ -356,6 +356,22 @@ short_source() { # compact display form of an install source
 
 file_date() { stat -f '%Sm' -t '%Y-%m-%d' "$1" 2>/dev/null || stat -c '%y' "$1" 2>/dev/null | cut -d' ' -f1; }
 
+uses_table() { # tally of Skill calls in Claude Code transcripts, cached for 5 min
+  local cache="$SKILLENV_HOME/cache/uses.tally"
+  if [ -f "$cache" ] && [ -n "$(find "$cache" -mmin -5 2>/dev/null)" ]; then
+    cat "$cache"; return 0
+  fi
+  mkdir -p "$SKILLENV_HOME/cache"
+  { # rg is ~75x faster than the system grep here; fall back when absent
+    if command -v rg >/dev/null 2>&1; then
+      rg -oINg '*.jsonl' '"skill":"[^"]+"' "$HOME/.claude/projects" 2>/dev/null
+    else
+      grep -rhoE '"skill":"[^"]+"' "$HOME/.claude/projects" --include='*.jsonl' 2>/dev/null
+    fi
+  } | sort | uniq -c > "$cache" || true
+  cat "$cache"
+}
+
 uses_of() { # lookup in the pre-computed transcript tally
   [ -n "${USES_TABLE:-}" ] || return 0
   printf '%s\n' "$USES_TABLE" | awk -v k="\"skill\":\"$1\"" '$2 == k { print $1; exit }'
@@ -389,7 +405,7 @@ list_dir() { # two lines per skill: name + source·date·uses, then description
 
 cmd_list() { # global skills, grouped by agent
   local agent dir
-  USES_TABLE=$(grep -rhoE '"skill":"[^"]+"' "$HOME/.claude/projects" --include='*.jsonl' 2>/dev/null | sort | uniq -c) || USES_TABLE=""
+  USES_TABLE=$(uses_table) || USES_TABLE=""
   for agent in $(detect_agents); do
     dir=$(agent_global_dir "$agent")
     printf '%b%s%b %b%s%b\n' "$BOLD$CYAN" "$agent" "$RST" "$DIM" "${dir/#$HOME/~}" "$RST"
