@@ -22,6 +22,12 @@ MARKER=".managed-by-skillenv"
 
 if command -v shasum >/dev/null 2>&1; then SHA="shasum -a 256"; else SHA="sha256sum"; fi
 
+if [ -t 1 ] || [ "${SKILLENV_COLOR:-}" = "1" ]; then
+  BOLD=$'\033[1m' DIM=$'\033[2m' CYAN=$'\033[36m' GREEN=$'\033[32m' YELLOW=$'\033[33m' RST=$'\033[0m'
+else
+  BOLD="" DIM="" CYAN="" GREEN="" YELLOW="" RST=""
+fi
+
 note() { echo "skillenv: $*" >&2; }
 die()  { note "$*"; exit 1; }
 
@@ -193,7 +199,7 @@ sync_project() {
       rm -rf "$dest"
       cp -R "$src" "$dest"
       rm -rf "$dest/.git"
-      touch "$dest/$MARKER"
+      printf '%s\n' "$s" > "$dest/$MARKER" # marker records the source; its mtime is the install date
     done <<< "$resolved"
   done
 }
@@ -340,31 +346,60 @@ agent_global_dir() {
   esac
 }
 
-list_dir() { # print indented rows for every skill in $1
-  local sk name flag desc any=""
+short_source() { # compact display form of an install source
+  local s=$1
+  s=${s#ssh://}; s=${s#https://}; s=${s#http://}; s=${s#git@}
+  s=${s/#$HOME/~}
+  [ "${#s}" -gt 44 ] && s="…${s:$((${#s} - 43))}"
+  printf '%s' "$s"
+}
+
+file_date() { stat -f '%Sm' -t '%Y-%m-%d' "$1" 2>/dev/null || stat -c '%y' "$1" 2>/dev/null | cut -d' ' -f1; }
+
+uses_of() { # lookup in the pre-computed transcript tally
+  [ -n "${USES_TABLE:-}" ] || return 0
+  printf '%s\n' "$USES_TABLE" | awk -v k="\"skill\":\"$1\"" '$2 == k { print $1; exit }'
+}
+
+list_dir() { # two lines per skill: name + source·date·uses, then description
+  local sk name flag src date uses meta desc any=""
   for sk in "$1"/*/; do
     [ -f "${sk}SKILL.md" ] || continue
     name=${sk%/}; name=${name##*/}
-    flag=" "; [ -f "${sk}$MARKER" ] && flag="*"
-    desc=$(grep -m1 '^description:' "${sk}SKILL.md" | cut -c14-90)
-    printf '  %s %-26s %s\n' "$flag" "$name" "$desc"
+    if [ -f "${sk}$MARKER" ]; then
+      flag="${GREEN}*${RST}"
+      src=$(head -1 "${sk}$MARKER" 2>/dev/null); src=${src:-managed}
+      date=$(file_date "${sk}$MARKER")
+    else
+      flag=" "
+      src="manual"
+      date=$(file_date "${sk}SKILL.md")
+    fi
+    meta="${DIM}$(short_source "$src") · ${date}${RST}"
+    uses=$(uses_of "$name")
+    [ -n "$uses" ] && meta="$meta ${YELLOW}· ${uses} uses${RST}"
+    printf '  %b %b%-26s%b %b\n' "$flag" "$BOLD" "$name" "$RST" "$meta"
+    desc=$(grep -m1 '^description:' "${sk}SKILL.md" 2>/dev/null) || desc=""
+    desc=${desc#description:}; desc=${desc# }; desc=${desc#\"}
+    [ -n "$desc" ] && printf '      %b%s%b\n' "$DIM" "${desc:0:80}" "$RST"
     any=1
   done
-  [ -n "$any" ] || echo "    (none)"
+  [ -n "$any" ] || printf '    %b(none)%b\n' "$DIM" "$RST"
 }
 
 cmd_list() { # global skills, grouped by agent
   local agent dir
+  USES_TABLE=$(grep -rhoE '"skill":"[^"]+"' "$HOME/.claude/projects" --include='*.jsonl' 2>/dev/null | sort | uniq -c) || USES_TABLE=""
   for agent in $(detect_agents); do
     dir=$(agent_global_dir "$agent")
-    printf '%s (%s)\n' "$agent" "${dir/#$HOME/~}"
+    printf '%b%s%b %b%s%b\n' "$BOLD$CYAN" "$agent" "$RST" "$DIM" "${dir/#$HOME/~}" "$RST"
     list_dir "$dir"
   done
   if [ -d "$HOME/.agents/skills" ]; then
-    printf 'shared (~/.agents/skills, read by opencode and other Agent-Skills tools)\n'
+    printf '%b%s%b %b~/.agents/skills · read by opencode and other Agent-Skills tools%b\n' "$BOLD$CYAN" "shared" "$RST" "$DIM" "$RST"
     list_dir "$HOME/.agents/skills"
   fi
-  note "* = managed by skillenv"
+  note "* = managed by skillenv · uses = Skill calls in local Claude Code transcripts"
 }
 
 cmd_install() { # <source> -> copy into every detected agent's global skills dir
@@ -384,7 +419,7 @@ cmd_install() { # <source> -> copy into every detected agent's global skills dir
     rm -rf "$dest"
     cp -R "$src" "$dest"
     rm -rf "$dest/.git"
-    touch "$dest/$MARKER"
+    printf '%s\n' "$s" > "$dest/$MARKER"
     note "installed $name -> $dest"
   done
   note "merge-mode repos pick this up on next cd; strict repos stay unaffected"
