@@ -133,6 +133,8 @@ skill /Users/me/store/private-skill    # 绝对路径：仅本机可用，勿提
 disable some-global-skill
 ```
 
+**从 marketplace 安装**：skills.sh 等市场没有独立的包托管，条目背后就是 git 仓库，所以不需要专门的源类型——把 skill 页面 URL 翻译成 git 坐标即可。例如 `https://skills.sh/vercel-labs/agent-skills/react-best-practices` 对应 `skill github:vercel-labs/agent-skills/skills/react-best-practices@main`（skill 通常在仓库的 `skills/` 容器目录下，装前可去仓库确认路径）。市场负责发现，清单里永远写精确的 git 坐标——间接的名字引用可能随时间易主，精确坐标才经得起 `skillenv allow` 的审阅。
+
 **源不可达时的行为**：某个 skill 拿不到（私有仓库无权限、别人机器的绝对路径）时，activate 会**警告并跳过它**，其余 skill、`disable` 与隔离照常生效；之前已物化的拷贝保留不删。源恢复可达后，下次进目录自动补装，无需任何命令。另外两道针对绝对路径的提醒：`.skillsrc` 被 git 跟踪且含绝对路径源时，`skillenv allow` 会警告"这只在本机可解析"；队友机器上解析失败的警告也会指明根因并建议改用 `github:` 源。
 
 ## 命令
