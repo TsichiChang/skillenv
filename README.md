@@ -146,7 +146,7 @@ disable some-global-skill
 | `skillenv activate` | 同步 skill 并输出 env export（由 `.envrc` 调用，也可手动跑） |
 | `skillenv status` | 查看信任状态、生效模式与当前环境 |
 | `skillenv scan` | 盘点本机所有已安装的 skill（全局 + 当前仓库项目级，含托管标记与描述） |
-| `skillenv list` | 全局 skill 清单，**按 agent 分组**：来源、安装日期、调用次数（基于 Claude Code 本地会话记录）、描述；TTY 下着色，管道输出自动去色 |
+| `skillenv list` | 全局 skill 清单，**按 agent 分组**：来源、安装日期、描述；TTY 下着色，管道输出自动去色 |
 | `skillenv install <源>` | **全局**安装：把 skill 装进每个已检测 agent 的全局目录（源格式同 `skill` 指令） |
 | `skillenv uninstall <名>` | **全局**卸载：从各全局目录移除（移入 `~/.skillenv/backup/`，永不真删） |
 | `skillenv prompt` | 输出提示符用的紧凑状态（见下节），无 `.skillsrc` 时输出为空 |
