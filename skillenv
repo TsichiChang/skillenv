@@ -62,7 +62,12 @@ detect_agents() { # which supported agents are actually installed on this machin
   echo "${found# }"
 }
 
-skill_name()  { local s=${1#github:}; s=${s%@*}; s=${s%/}; printf '%s' "${s##*/}"; }
+skill_name()  {
+  local s=${1#github:}; s=${s#git:}; s=${s%/}
+  s=${s##*/}  # last path component; @ref only ever lives here
+  s=${s%@*}; s=${s%.git}
+  printf '%s' "$s"
+}
 is_disabled() { local d; for d in $DISABLES; do [ "$d" = "$1" ] && return 0; done; return 1; }
 in_manifest() { local s; for s in $SKILLS; do [ "$(skill_name "$s")" = "$1" ] && return 0; done; return 1; }
 
@@ -102,11 +107,32 @@ fetch_github() { # owner/repo[/sub/dir][@ref] -> echoes skill dir
   echo "$cache${sub:+/$sub}"
 }
 
+fetch_git() { # any git url, with .git marking the repo boundary: url[/sub/dir][@ref]
+  local spec=$1 url rest="" sub="" ref="" last cache
+  case "$spec" in
+    *.git/*) url="${spec%%.git/*}.git"; rest=${spec#*.git/} ;;
+    *)       url=$spec ;;
+  esac
+  if [ -n "$rest" ]; then
+    case "$rest" in *@*) ref=${rest##*@}; sub=${rest%@*} ;; *) sub=$rest ;; esac
+  else
+    last=${url##*/} # a ref can only follow the last path component (git@host: has its own @)
+    case "$last" in *@*) ref=${last##*@}; url=${url%@"$ref"} ;; esac
+  fi
+  cache="$SKILLENV_HOME/cache/git/$(hash_str "$url")${ref:+@$ref}"
+  if [ ! -d "$cache/.git" ]; then
+    note "fetching $url${ref:+ ($ref)}"
+    git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$url" "$cache" >&2
+  fi
+  echo "$cache${sub:+/$sub}"
+}
+
 resolve_source() {
   case "$1" in
     github:*)    fetch_github "${1#github:}" ;;
+    git:*)       fetch_git "${1#git:}" ;;
     ./*|../*|/*) echo "$1" ;;
-    *) die "unsupported skill source: $1 (use github:owner/repo[/dir][@ref] or a local path)" ;;
+    *) die "unsupported skill source: $1 (use github:owner/repo[/dir][@ref], git:<url>[/dir][@ref], or a local path)" ;;
   esac
 }
 
@@ -264,6 +290,7 @@ cmd_init() {
 #   agents claude codex opencode    # ...or list explicitly (default: claude codex)
 #   isolation strict                # strict = hide ALL global skills; merge = globals + repo (default)
 #   skill github:owner/repo/path/to/skill@ref
+#   skill git:ssh://git@your-git-host/group/repo.git/path/to/skill@ref
 #   skill ./skills/my-local-skill
 #   disable name-of-a-global-skill  # hide one global skill (works in merge mode)
 EOF

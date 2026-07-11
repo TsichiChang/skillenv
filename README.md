@@ -123,8 +123,9 @@ agents auto
 # strict：屏蔽所有全局 skill，只保留 manifest 声明的
 isolation strict
 
-# skill 来源：github 仓库子目录（@ref 为分支或 tag），或本地路径
+# skill 来源：github 简写、任意 git URL（@ref 为分支或 tag），或本地路径
 skill github:anthropics/skills/document-skills/pdf@main
+skill git:ssh://git@dev.example.com/group/skills.git/my-skill@main   # 内网/自建 git，.git 为仓库边界
 skill ./skills/my-local-skill          # 相对路径：相对仓库根，可随仓库提交
 skill /Users/me/store/private-skill    # 绝对路径：仅本机可用，勿提交进 git
 
@@ -200,5 +201,5 @@ function prompt_skillenv() {
 - **OpenCode 的全局 skill 无法屏蔽**：它硬编码读取 `~/.claude/skills` 和 `~/.agents/skills`，配置目录重定向拦不住；仓库级 skill 不受影响。
 - **Claude Code 的插件 skill 不被 strict 屏蔽**（shadow 会保留 plugins 配置以免破坏登录态等功能）；按仓库关插件请用 `.claude/settings.json` 的 `enabledPlugins`。
 - Claude Code 的 **VS Code 扩展不读取 `CLAUDE_CONFIG_DIR`**，隔离只对终端启动的 CLI 生效。
-- `@ref` 仅支持分支/标签（`git clone --branch`），不支持 commit SHA；skill 路径不能含空格；远程源暂只支持 GitHub。
+- `@ref` 仅支持分支/标签（`git clone --branch`），不支持 commit SHA；skill 路径不能含空格。
 - 已在运行的 agent session 不受进出目录影响（环境变量在进程启动时读取——这也是符合预期的语义）。
