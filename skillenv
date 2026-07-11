@@ -356,42 +356,51 @@ short_source() { # compact display form of an install source
 
 file_date() { stat -f '%Sm' -t '%Y-%m-%d' "$1" 2>/dev/null || stat -c '%y' "$1" 2>/dev/null | cut -d' ' -f1; }
 
-list_dir() { # two lines per skill: name + source·date, then description
-  local sk name flag src date meta desc any=""
-  for sk in "$1"/*/; do
+list_section() { # $1 label, $2 path text, $3 dir — tree-style section (npm ls / nvm ls inspired)
+  local dir=$3 entries="" sk n=0 i=0 name flag src date conn pad desc
+  for sk in "$dir"/*/; do
     [ -f "${sk}SKILL.md" ] || continue
+    entries="${entries}${sk}"$'\n'
+    n=$((n + 1))
+  done
+  printf '\n%b◆ %s%b  %b%s · %s skill%s%b\n' \
+    "$BOLD$CYAN" "$1" "$RST" "$DIM" "$2" "$n" "$([ "$n" -ne 1 ] && echo s)" "$RST"
+  if [ "$n" -eq 0 ]; then
+    printf '  %b└─ (no skills)%b\n' "$DIM" "$RST"
+    return 0
+  fi
+  while IFS= read -r sk; do
+    [ -n "$sk" ] || continue
+    i=$((i + 1))
+    if [ "$i" -eq "$n" ]; then conn='└─'; pad='  '; else conn='├─'; pad='│ '; fi
     name=${sk%/}; name=${name##*/}
     if [ -f "${sk}$MARKER" ]; then
-      flag="${GREEN}*${RST}"
+      flag="${GREEN}●${RST}"
       src=$(head -1 "${sk}$MARKER" 2>/dev/null); src=${src:-managed}
       date=$(file_date "${sk}$MARKER")
     else
-      flag=" "
+      flag="${DIM}○${RST}"
       src="manual"
       date=$(file_date "${sk}SKILL.md")
     fi
-    meta="${DIM}$(short_source "$src") · ${date}${RST}"
-    printf '  %b %b%-26s%b %b\n' "$flag" "$BOLD" "$name" "$RST" "$meta"
+    printf '  %b%s%b %b %b%-24s%b %b%s · %s%b\n' \
+      "$DIM" "$conn" "$RST" "$flag" "$BOLD" "$name" "$RST" "$DIM" "$(short_source "$src")" "$date" "$RST"
     desc=$(grep -m1 '^description:' "${sk}SKILL.md" 2>/dev/null) || desc=""
     desc=${desc#description:}; desc=${desc# }; desc=${desc#\"}
-    [ -n "$desc" ] && printf '      %b%s%b\n' "$DIM" "${desc:0:80}" "$RST"
-    any=1
-  done
-  [ -n "$any" ] || printf '    %b(none)%b\n' "$DIM" "$RST"
+    [ -n "$desc" ] && printf '  %b%s%b     %b%s%b\n' "$DIM" "$pad" "$RST" "$DIM" "${desc:0:76}" "$RST"
+  done <<< "$entries"
 }
 
 cmd_list() { # global skills, grouped by agent
   local agent dir
   for agent in $(detect_agents); do
     dir=$(agent_global_dir "$agent")
-    printf '%b%s%b %b%s%b\n' "$BOLD$CYAN" "$agent" "$RST" "$DIM" "${dir/#$HOME/~}" "$RST"
-    list_dir "$dir"
+    list_section "$agent" "${dir/#$HOME/~}" "$dir"
   done
   if [ -d "$HOME/.agents/skills" ]; then
-    printf '%b%s%b %b~/.agents/skills · read by opencode and other Agent-Skills tools%b\n' "$BOLD$CYAN" "shared" "$RST" "$DIM" "$RST"
-    list_dir "$HOME/.agents/skills"
+    list_section "shared" "~/.agents/skills · opencode etc." "$HOME/.agents/skills"
   fi
-  note "* = managed by skillenv"
+  printf '\n%b● managed by skillenv   ○ installed manually%b\n' "$DIM" "$RST" >&2
 }
 
 cmd_install() { # <source> -> copy into every detected agent's global skills dir
