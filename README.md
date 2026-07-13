@@ -147,7 +147,7 @@ disable some-global-skill
 | `skillenv status` | 查看信任状态、生效模式与当前环境 |
 | `skillenv scan` | 盘点本机所有已安装的 skill（全局 + 当前仓库项目级，含托管标记与描述） |
 | `skillenv list` | 全局 skill 清单，**按 agent 分组的树形视图**：来源、安装日期、描述，`●`=skillenv 托管 / `○`=手工安装；TTY 下着色，管道输出自动去色 |
-| `skillenv install <源>` | **全局**安装：把 skill 装进每个已检测 agent 的全局目录（源格式同 `skill` 指令） |
+| `skillenv install <源> [名字...]` | **全局**安装：把 skill 装进每个已检测 agent 的全局目录（源格式同 `skill` 指令）。源若不含 SKILL.md 而是个仓库/容器目录，会递归找出其中所有 skill：不带名字时列出清单（有 TTY 则接着交互式提问装哪些，无 TTY 只打印清单和下一步命令）；带名字（或 `all`）则直接非交互安装 |
 | `skillenv uninstall <名>` | **全局**卸载：从各全局目录移除（移入 `~/.skillenv/backup/`，永不真删） |
 | `skillenv prompt` | 输出提示符用的紧凑状态（见下节），无 `.skillsrc` 时输出为空 |
 | `skillenv update` | 升级 skillenv 本体（git 安装则 `git pull`，curl 安装则重新下载） |
@@ -166,6 +166,18 @@ disable some-global-skill
 ```
 
 **全局层与仓库层的分工**：仓库层是声明式的（`.skillsrc` 写什么就是什么），全局层是命令式的（`install`/`uninstall` 直接改全局目录）。两层的交互由模式决定：全局装了新 skill，merge 仓库下次 cd 自动可见（shadow 每次重算），strict 仓库不受影响；`disable` 仍可在个别仓库屏蔽全局装的 skill。`install` 不会覆盖手工放置的同名 skill（无托管标记则跳过）；`uninstall` 对任何同名全局 skill 生效，但一律移入备份而非删除。同一 skill 想更新，重跑 `install` 即可（托管标记允许覆盖）。
+
+**给一整个仓库而不是具体 skill 路径**：`install` 的源如果自己没有 `SKILL.md`，会被当成仓库/容器目录，递归找出其中所有 skill：
+
+```
+$ skillenv install github:vercel-labs/agent-skills
+skillenv: no SKILL.md at github:vercel-labs/agent-skills itself — found 2 skill(s) inside:
+  skills/react-best-practices    React and Next.js performance optimization guidelines…
+  skills/vercel-deploy           Deploy and manage projects on Vercel…
+skillenv: install which? (names, 'all', or blank to cancel): react-best-practices
+```
+
+不带名字直接回车会取消；也可以一次性传 `all` 或具体名字跳过交互，例如 `skillenv install github:vercel-labs/agent-skills react-best-practices`。非 TTY 环境下（脚本、agent 调用）不带名字时只打印清单和可用的下一条命令，不会挂起等待输入。
 
 ## 静音与提示符集成
 

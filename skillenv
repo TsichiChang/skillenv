@@ -9,7 +9,7 @@
 #   skillenv status     show trust state and what is active
 #   skillenv scan       inventory every skill installed on this machine
 #   skillenv list       global skills, grouped by agent
-#   skillenv install    install a skill into every detected agent's GLOBAL dir
+#   skillenv install    install a skill (or browse+pick from a repo) into every detected agent's GLOBAL dir
 #   skillenv uninstall  move a skill out of the global dirs (backed up, never deleted)
 #   skillenv prompt     compact status for shell prompts (starship/p10k)
 #   skillenv update     pull the latest skillenv (git checkout or re-download)
@@ -403,11 +403,8 @@ cmd_list() { # global skills, grouped by agent
   printf '\n%b● managed by skillenv   ○ installed manually%b\n' "$DIM" "$RST" >&2
 }
 
-cmd_install() { # <source> -> copy into every detected agent's global skills dir
-  local s=${1:-} src name agent dir dest
-  [ -n "$s" ] || die "usage: skillenv install <source>   (github:owner/repo[/dir][@ref], git:<url>, or a local path)"
-  src=$(resolve_source "$s") || die "cannot fetch $s"
-  [ -f "$src/SKILL.md" ] || die "no SKILL.md at $s"
+install_one() { # $1 source string (recorded as provenance), $2 resolved dir containing SKILL.md
+  local s=$1 src=$2 name agent dir dest
   name=$(skill_name "$s")
   for agent in $(detect_agents); do
     dir=$(agent_global_dir "$agent")
@@ -423,7 +420,93 @@ cmd_install() { # <source> -> copy into every detected agent's global skills dir
     printf '%s\n' "$s" > "$dest/$MARKER"
     note "installed $name -> $dest"
   done
-  note "merge-mode repos pick this up on next cd; strict repos stay unaffected"
+}
+
+append_sub() { # $1 source string, $2 relative path -> source string with $2 appended before any @ref
+  local s=$1 rel=$2 body ref="" last
+  case "$s" in
+    github:*)
+      body=${s#github:}
+      case "$body" in *@*) ref=${body##*@}; body=${body%@*} ;; esac
+      printf 'github:%s/%s%s' "$body" "$rel" "${ref:+@$ref}"
+      ;;
+    git:*)
+      body=${s#git:}
+      last=${body##*/} # a ref can only follow the last path component (git@host: has its own @)
+      case "$last" in *@*) ref=${last##*@}; body=${body%@"$ref"} ;; esac
+      printf 'git:%s/%s%s' "$body" "$rel" "${ref:+@$ref}"
+      ;;
+    *) printf '%s/%s' "${s%/}" "$rel" ;;
+  esac
+}
+
+install_picks() { # $1 source, $2 resolved dir, $3 newline-list of absolute skill dirs found under it, $4.. picks (rel path / basename / 'all')
+  local s=$1 src=$2 found=$3; shift 3
+  local pick d rel installed=0 matched
+  for pick in "$@"; do
+    matched=0
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      rel=${d#"$src"/}
+      if [ "$pick" = all ] || [ "$rel" = "$pick" ] || [ "${rel##*/}" = "$pick" ]; then
+        install_one "$(append_sub "$s" "$rel")" "$d"
+        installed=$((installed + 1))
+        matched=1
+      fi
+    done <<< "$found"
+    [ "$matched" -eq 1 ] || note "skipping '$pick' — no matching skill under $s"
+  done
+  [ "$installed" -gt 0 ] && note "merge-mode repos pick this up on next cd; strict repos stay unaffected"
+}
+
+browse_and_install() { # $1 source with no SKILL.md at its own root, $2 resolved local dir, $3.. optional picks (rel path / basename / 'all')
+  local s=$1 src=$2; shift 2
+  local found="" f n=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    found="$found${f%/SKILL.md}
+"
+    n=$((n + 1))
+  done <<< "$(find "$src" -name SKILL.md | sort)"
+  [ "$n" -gt 0 ] || die "no SKILL.md found under $s (searched recursively) — not a skill or a container of skills"
+
+  if [ "$#" -gt 0 ]; then
+    install_picks "$s" "$src" "$found" "$@"
+    return 0
+  fi
+
+  note "no SKILL.md at $s itself — found $n skill(s) inside:"
+  local d rel desc
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    rel=${d#"$src"/}
+    desc=$(grep -m1 '^description:' "$d/SKILL.md" 2>/dev/null | cut -c14-110)
+    printf '  %-30s %s\n' "$rel" "$desc"
+  done <<< "$found"
+
+  if [ ! -t 0 ]; then
+    note "install specific ones with: skillenv install $s <name-or-path> [...]  (or 'all')"
+    return 0
+  fi
+
+  local choice
+  read -r -p "skillenv: install which? (names, 'all', or blank to cancel): " choice || choice=""
+  [ -n "$choice" ] || { note "cancelled"; return 0; }
+  # shellcheck disable=SC2086
+  install_picks "$s" "$src" "$found" $choice
+}
+
+cmd_install() { # <source> [name-or-path ...] -> install a skill, or browse a repo/container and install picks
+  local s=${1:-} src
+  [ -n "$s" ] || die "usage: skillenv install <source> [skill-name ...]   (source: github:owner/repo[/dir][@ref], git:<url>, or a local path)"
+  shift
+  src=$(resolve_source "$s") || die "cannot fetch $s"
+  if [ -f "$src/SKILL.md" ]; then
+    install_one "$s" "$src"
+    note "merge-mode repos pick this up on next cd; strict repos stay unaffected"
+    return 0
+  fi
+  browse_and_install "$s" "$src" "$@"
 }
 
 cmd_uninstall() { # <name> -> move out of every global dir into ~/.skillenv/backup
@@ -466,7 +549,7 @@ case "${1:-help}" in
   status)        cmd_status ;;
   scan)          cmd_scan ;;
   list)          cmd_list ;;
-  install)       shift; cmd_install "${1:-}" ;;
+  install)       shift; cmd_install "$@" ;;
   uninstall)     shift; cmd_uninstall "${1:-}" ;;
   prompt)        cmd_prompt ;;
   update)        cmd_update ;;
