@@ -1,5 +1,7 @@
 # skillenv
 
+[English](README.en.md) | [简体中文](README.md)
+
 像 pyenv / nvm 管理语言版本一样，按仓库管理 AI Agent 的 skill。
 
 进入目录 → 自动安装 `.skillsrc` 声明的 skill、按需屏蔽全局 skill；离开目录 → 一切恢复原样。同一份声明对 Claude Code、Codex、OpenCode 等所有支持 [Agent Skills 标准](https://code.claude.com/docs/en/skills)的工具生效。
