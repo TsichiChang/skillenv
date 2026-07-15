@@ -144,7 +144,7 @@ disable some-global-skill
 
 | Command | What it does |
 |---|---|
-| `skillenv init` | Scaffold `.skillsrc` + `.envrc` in the current repo |
+| `skillenv init` | Scaffold `.skillsrc` + `.envrc` in the current repo; every run first re-fetches and reinstalls every skillenv-managed global skill; with a TTY it then walks you through reviewing this repo's skill config (declared skills, isolation mode, enabling/hiding/uninstalling global skills — see example below) |
 | `skillenv allow` | Trust the current `.skillsrc` (hash recorded under `~/.skillenv/trust/`) |
 | `skillenv activate` | Sync skills and print env exports (called from `.envrc`, can also be run manually) |
 | `skillenv status` | Show trust state, active mode, and current environment |
@@ -166,6 +166,37 @@ disable some-global-skill
 
 ◆ opencode  ~/.config/opencode/skills · 0 skills
   └─ (no skills)
+```
+
+**init's every run: refreshing managed global skills first**: the first thing `skillenv init` does is walk every global skill directory on this machine and, for each one carrying a `.managed-by-skillenv` marker, re-fetch it from its recorded source (`github:`/`git:` sources force-pull the latest commit, overwriting the local cache) and reinstall it; skills placed manually (no marker) are left untouched. This runs whether `.skillsrc` is new or already exists, and whether or not there's a TTY; a single source failing to refresh (offline, no access to a private repo, …) just warns and is skipped, without affecting anything else. It reuses the same fetch/install logic as `skillenv install`, just with a forced cache refresh — right now only `init` does this; rerunning `install` on its own does not.
+
+**init's every run: interactive config review**: once the refresh finishes and the scaffold is in place, as long as there's a TTY, `skillenv init` walks you through this repo's skill config — not just the first time, every run (including repos that already ship a `.skillsrc`, so you can adjust anytime; an agent calling it without a TTY skips the whole thing rather than blocking). The review has four sections; each lists the relevant skills, explains what each action does, and lets you pick by name (`all` and enter-to-skip supported):
+
+- **skills this repo declares** (`skill` directives in `.skillsrc`) — `remove` a declaration;
+- **isolation mode** — shows whether you're on merge or strict, and offers to switch to strict (hide all global skills);
+- **global skills this repo currently hides** (`disable` directives) — `enable` to inherit again, or `uninstall` from the whole machine;
+- **other global skills still inherited** — `disable` to hide just in this repo, or `uninstall` from the whole machine.
+
+`remove`/`enable`/`disable` only edit this repo's `.skillsrc`; `uninstall` affects every repo on the machine (moved to `~/.skillenv/backup/`, never actually deleted). Every change still needs `skillenv allow && direnv allow` afterward to take effect. In the list, `●` = currently active/inherited, `⊘` = hidden in this repo; adding a `disable` shows as `+`, removing a declaration or hide shows as `-`:
+
+```
+$ skillenv init
+skillenv: created .skillsrc
+skillenv: wrote .envrc
+
+◆ isolation
+  merge (current) — inherit global skills, add repo-declared ones on top
+  › block all global skills for this repo? (y/N) n
+
+◆ other global skills on this machine
+  disable = hide in this repo · uninstall = remove from every repo
+  ● bi-query-sql            Use when: (1) SQL query helper for…
+  ● eden-dev                Eden dev environment wizard…
+  › uninstall which? (names · all · ↵ skip)
+  › disable which? (names · all · ↵ skip) eden-dev
+  + disable eden-dev
+
+skillenv: next: edit .skillsrc, then run: skillenv allow && direnv allow
 ```
 
 **Division of labor between the global and repo layers**: the repo layer is declarative (`.skillsrc` is exactly what it says); the global layer is imperative (`install`/`uninstall` edit the global directories directly). How the two interact depends on the mode: when a new skill is installed globally, a merge-mode repo picks it up automatically on the next `cd` (the shadow is recomputed every time), while a strict-mode repo is unaffected; `disable` can still hide a globally-installed skill in an individual repo. `install` never overwrites a same-named skill that was placed manually (no managed marker → skipped); `uninstall` acts on any same-named global skill, but always moves it to backup rather than deleting it. To update a skill, just rerun `install` (the managed marker allows it to overwrite).

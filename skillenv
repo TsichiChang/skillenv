@@ -77,6 +77,21 @@ skill_name()  {
   s=${s%@*}; s=${s%.git}
   printf '%s' "$s"
 }
+skill_desc() { # $1 SKILL.md path, $2 max display length (default 72) -> cleaned, ellipsis-truncated description
+  local file=$1 max=${2:-72} raw
+  raw=$(grep -m1 '^description:' "$file" 2>/dev/null) || return 0
+  raw=${raw#description:}
+  raw=${raw# }
+  raw=${raw#\"}; raw=${raw%\"}
+  case "$raw" in
+    ""|">"|">-"|">+"|"|"|"|-"|"|+") return 0 ;; # YAML block-scalar marker — actual text is on later lines, not worth chasing
+  esac
+  if [ "${#raw}" -gt "$max" ]; then
+    printf '%s…' "${raw:0:$((max - 1))}"
+  else
+    printf '%s' "$raw"
+  fi
+}
 is_disabled() { local d; for d in $DISABLES; do [ "$d" = "$1" ] && return 0; done; return 1; }
 in_manifest() { local s; for s in $SKILLS; do [ "$(skill_name "$s")" = "$1" ] && return 0; done; return 1; }
 
@@ -102,6 +117,19 @@ cmd_allow() {
 
 # ---------- skill sources ----------
 
+REFRESH="" # a truthy value makes fetch_github/fetch_git update an already-cloned cache before using it
+
+refresh_cache() { # $1 cache dir, $2 ref (may be empty), $3 display label — best-effort
+  local cache=$1 ref=$2 label=$3 branch
+  branch=$(git -C "$cache" rev-parse --abbrev-ref HEAD 2>/dev/null) || return 0
+  [ "$branch" = HEAD ] && branch=$ref # detached = cloned at a tag; refetch the tag itself
+  [ -n "$branch" ] || return 0
+  note "refreshing $label"
+  git -C "$cache" fetch --quiet --depth 1 origin "$branch" >&2 \
+    && git -C "$cache" reset --quiet --hard FETCH_HEAD >&2 \
+    || note "warning: cannot refresh $label — using the cached copy"
+}
+
 fetch_github() { # owner/repo[/sub/dir][@ref] -> echoes skill dir
   local spec=$1 ref="" sub="" owner repo rest cache
   case "$spec" in *@*) ref=${spec##*@}; spec=${spec%@*} ;; esac
@@ -112,6 +140,8 @@ fetch_github() { # owner/repo[/sub/dir][@ref] -> echoes skill dir
     note "fetching github.com/$owner/$repo${ref:+ ($ref)}"
     git clone --quiet --depth 1 ${ref:+--branch "$ref"} \
       "https://github.com/$owner/$repo.git" "$cache" >&2
+  elif [ -n "$REFRESH" ]; then
+    refresh_cache "$cache" "$ref" "github.com/$owner/$repo${ref:+ ($ref)}"
   fi
   echo "$cache${sub:+/$sub}"
 }
@@ -132,6 +162,8 @@ fetch_git() { # any git url, with .git marking the repo boundary: url[/sub/dir][
   if [ ! -d "$cache/.git" ]; then
     note "fetching $url${ref:+ ($ref)}"
     git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$url" "$cache" >&2
+  elif [ -n "$REFRESH" ]; then
+    refresh_cache "$cache" "$ref" "$url${ref:+ ($ref)}"
   fi
   echo "$cache${sub:+/$sub}"
 }
@@ -290,7 +322,27 @@ cmd_status() {
   echo "env:       CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-<unset>} CODEX_HOME=${CODEX_HOME:-<unset>}"
 }
 
+refresh_global_skills() { # re-fetch every skillenv-managed global skill from its recorded source and reinstall it
+  local agent sk s src seen=" "
+  REFRESH=1
+  for agent in $(detect_agents); do
+    for sk in "$(agent_global_dir "$agent")"/*/; do
+      [ -f "${sk}$MARKER" ] || continue
+      s=$(head -1 "${sk}$MARKER" 2>/dev/null) || continue
+      [ -n "$s" ] || continue
+      case "$seen" in *" $s "*) continue ;; esac
+      seen="$seen$s "
+      if src=$(resolve_source "$s") && [ -f "$src/SKILL.md" ]; then
+        install_one "$s" "$src"
+      else
+        note "warning: cannot refresh $s — skipped"
+      fi
+    done
+  done
+}
+
 cmd_init() {
+  refresh_global_skills
   if [ ! -f "$MANIFEST" ]; then
     cat > "$MANIFEST" <<'EOF'
 # skillenv manifest — one directive per line
@@ -309,9 +361,102 @@ EOF
     printf 'watch_file %s\neval "$(skillenv activate)"\n' "$MANIFEST" >> .envrc
     note "wrote .envrc"
   fi
+  # every run reviews this repo's skill config against what's installed —
+  # skipped only when there's no TTY (an agent-driven `skillenv init` must
+  # never block waiting for input)
+  [ -t 0 ] && init_interactive
+  [ -t 0 ] && printf '\n' >&2
   note "next: edit $MANIFEST, then run: skillenv allow && direnv allow"
   note "if you do not want materialized skills in git, add to .gitignore:"
   note "  .claude/skills/ .codex/skills/ .opencode/skills/ .agents/skills/"
+}
+
+section_header() { printf '\n%b◆ %s%b\n' "$BOLD$CYAN" "$1" "$RST" >&2; }
+prompt()  { printf '  %b›%b %s ' "$CYAN" "$RST" "$1"; } # read -p string: cyan marker + question
+changed() { # $1 = +|- , $2.. = text -> diff-style manifest-change feedback ('+' added, '-' removed)
+  local sym=$1; shift
+  case "$sym" in
+    +) printf '  %b+%b %s\n' "$GREEN" "$RST" "$*" >&2 ;;
+    *) printf '  %b-%b %s\n' "$DIM"   "$RST" "$*" >&2 ;;
+  esac
+}
+
+init_interactive() { # every call, with a TTY: review this repo's declared skills, isolation, and global skills
+  local choice rows picks name s declared_names all_rows
+  local on="${GREEN}●${RST}" off="${DIM}⊘${RST}"
+
+  parse_manifest
+
+  # 1 — skills this repo declares
+  if [ -n "$SKILLS" ]; then
+    rows=""
+    for s in $SKILLS; do rows="$rows$(skill_name "$s")"$'\t'"$s"$'\n'; done
+    section_header "skills declared in this repo"
+    hint "remove = drop the declaration; the skill stops being materialized here"
+    list_rows "$rows" "$on"
+    picks=$(ask_names remove)
+    if [ -n "$picks" ]; then
+      case " $picks " in *" all "*) picks=$(printf '%s\n' "$rows" | cut -f1 | tr '\n' ' ') ;; esac
+      drop_manifest_entries skill "$picks" byname
+      for name in $picks; do changed - "skill $name"; done
+    fi
+  fi
+
+  # 2 — isolation mode
+  section_header "isolation"
+  if [ "$ISOLATION" = strict ]; then
+    hint "strict (current) — hide every global skill; only repo-declared ones apply"
+  else
+    hint "merge (current) — inherit global skills, add repo-declared ones on top"
+  fi
+  read -r -p "$(prompt 'block all global skills for this repo? (y/N)')" choice || choice=""
+  case "$choice" in
+    y|Y|yes|YES)
+      drop_isolation_lines
+      printf '\nisolation strict\n' >> "$MANIFEST"
+      changed + "isolation strict"
+      return 0
+      ;;
+  esac
+  drop_isolation_lines # staying in / switching to merge — merge is the default, no line needed
+
+  all_rows=$(enabled_names)
+
+  # 3 — skills this repo currently hides
+  rows=$(filter_rows "$all_rows" "$DISABLES" only)
+  if [ -n "$rows" ]; then
+    section_header "hidden in this repo"
+    hint "enable = inherit again · uninstall = remove everywhere (kept in backup)"
+    rows=$(offer_global_uninstall "$rows" "$off")
+    if [ -n "$rows" ]; then
+      picks=$(ask_names enable)
+      if [ -n "$picks" ]; then
+        case " $picks " in *" all "*) picks=$(printf '%s\n' "$rows" | cut -f1 | tr '\n' ' ') ;; esac
+        drop_manifest_entries disable "$picks"
+        for name in $picks; do changed - "disable $name"; done
+      fi
+    fi
+  fi
+
+  # 4 — other global skills this repo inherits
+  declared_names=""
+  for s in $SKILLS; do declared_names="$declared_names $(skill_name "$s")"; done
+  rows=$(filter_rows "$all_rows" "$DISABLES$declared_names" except)
+  if [ -n "$rows" ]; then
+    section_header "other global skills on this machine"
+    hint "disable = hide in this repo · uninstall = remove from every repo"
+    rows=$(offer_global_uninstall "$rows" "$on")
+    if [ -n "$rows" ]; then
+      picks=$(ask_names disable)
+      if [ -n "$picks" ]; then
+        case " $picks " in *" all "*) picks=$(printf '%s\n' "$rows" | cut -f1 | tr '\n' ' ') ;; esac
+        for name in $picks; do
+          printf 'disable %s\n' "$name" >> "$MANIFEST"
+          changed + "disable $name"
+        done
+      fi
+    fi
+  fi
 }
 
 cmd_scan() { # inventory: location, name, [skillenv]-managed flag, description
@@ -326,7 +471,7 @@ cmd_scan() { # inventory: location, name, [skillenv]-managed flag, description
       [ -f "${sk}SKILL.md" ] || continue
       name=$(basename "$sk")
       flag=" "; [ -f "${sk}$MARKER" ] && flag="*"
-      desc=$(grep -m1 '^description:' "${sk}SKILL.md" | cut -c14-110)
+      desc=$(skill_desc "${sk}SKILL.md" 96)
       printf '%-17s %s %-28s %s\n' "${loc%%:*}" "$flag" "$name" "$desc"
     done
   done
@@ -385,9 +530,9 @@ list_section() { # $1 label, $2 path text, $3 dir — tree-style section (npm ls
     fi
     printf '  %b%s%b %b %b%-24s%b %b%s · %s%b\n' \
       "$DIM" "$conn" "$RST" "$flag" "$BOLD" "$name" "$RST" "$DIM" "$(short_source "$src")" "$date" "$RST"
-    desc=$(grep -m1 '^description:' "${sk}SKILL.md" 2>/dev/null) || desc=""
-    desc=${desc#description:}; desc=${desc# }; desc=${desc#\"}
-    [ -n "$desc" ] && printf '  %b%s%b     %b%s%b\n' "$DIM" "$pad" "$RST" "$DIM" "${desc:0:76}" "$RST"
+    desc=$(skill_desc "${sk}SKILL.md" 120)
+    desc=$(disp_trunc "$desc" "$(( $(term_cols) - 10 ))") # continuation line is indented 9 cols
+    [ -n "$desc" ] && printf '  %b%s%b     %b%s%b\n' "$DIM" "$pad" "$RST" "$DIM" "$desc" "$RST"
   done <<< "$entries"
 }
 
@@ -480,7 +625,7 @@ browse_and_install() { # $1 source with no SKILL.md at its own root, $2 resolved
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     rel=${d#"$src"/}
-    desc=$(grep -m1 '^description:' "$d/SKILL.md" 2>/dev/null | cut -c14-110)
+    desc=$(skill_desc "$d/SKILL.md" 90)
     printf '  %-30s %s\n' "$rel" "$desc"
   done <<< "$found"
 
@@ -524,6 +669,132 @@ cmd_uninstall() { # <name> -> move out of every global dir into ~/.skillenv/back
     found=1
   done
   [ -n "$found" ] || note "no global skill named '$name' for detected agents ($(detect_agents))"
+}
+
+# ---------- interactive picker (used by `init`) ----------
+
+enabled_names() { # union of global skills across detected agents: name<TAB>description
+  local agent sk name seen=" " desc
+  for agent in $(detect_agents); do
+    for sk in "$(agent_global_dir "$agent")"/*/; do
+      [ -f "${sk}SKILL.md" ] || continue
+      name=${sk%/}; name=${name##*/}
+      case "$seen" in *" $name "*) continue ;; esac
+      seen="$seen$name "
+      desc=$(skill_desc "${sk}SKILL.md" 120) # upper bound; list_rows truncates to the terminal width
+      printf '%s\t%s\n' "$name" "$desc"
+    done
+  done
+}
+
+term_cols() { # width of the controlling terminal; 80 when there is none. Used only to truncate text to fit,
+  # never to draw a fixed-width border — so an approximate answer degrades gracefully (a char more/less), it can't break a layout.
+  local c
+  c=$(stty size </dev/tty 2>/dev/null | awk '{print $2}') || c=""
+  case "$c" in ''|*[!0-9]*) c=80 ;; esac
+  printf '%s' "$c"
+}
+
+disp_trunc() { # $1 text, $2 max display columns -> text cut to fit (… if cut). Non-ASCII counts as 2 columns
+  # (good enough for CJK), so a mixed-width line never overflows and wraps. Codepoint-accurate in a UTF-8 locale.
+  local s=$1 max=$2 i c cw w=0 out="" n
+  n=${#s} # separate line: within a single `local`, ${#s} would read s before s=$1 takes effect
+  [ "$max" -lt 2 ] && max=2
+  for ((i = 0; i < n; i++)); do
+    c=${s:i:1}
+    # [[:ascii:]] not [ -~]: in a UTF-8 locale a bracket *range* collates by
+    # locale order, not codepoints, so [ -~] only matches its endpoints. The
+    # class matches any single-byte ASCII char (width 1); everything else is
+    # a wide/CJK codepoint counted as 2.
+    case "$c" in [[:ascii:]]) cw=1 ;; *) cw=2 ;; esac
+    if (( w + cw > max )); then printf '%s…' "$out"; return; fi
+    out=$out$c; w=$((w + cw))
+  done
+  printf '%s' "$out"
+}
+
+list_rows() { # $1 rows (name<TAB>extra), $2 already-colored glyph -> aligned one-line skill rows to stderr.
+  # The description is the last thing on the line and truncated to the columns
+  # actually left after the (ASCII, exactly-padded) name — so every row is one
+  # clean line that never wraps, at any width, CJK included.
+  local rows=$1 glyph=$2 name extra cols avail namew
+  cols=$(term_cols)
+  while IFS=$'\t' read -r name extra; do
+    [ -n "$name" ] || continue
+    if [ -n "$extra" ]; then
+      namew=${#name}; [ "$namew" -lt 22 ] && namew=22
+      avail=$(( cols - namew - 7 )) # 2 indent + glyph + 2 gaps + 1 right margin
+      extra=$(disp_trunc "$extra" "$avail")
+      printf '  %b %b%-22s%b  %b%s%b\n' "$glyph" "$BOLD" "$name" "$RST" "$DIM" "$extra" "$RST" >&2
+    else
+      printf '  %b %b%s%b\n' "$glyph" "$BOLD" "$name" "$RST" >&2
+    fi
+  done <<< "$rows"
+}
+
+hint() { printf '  %b%s%b\n' "$DIM" "$*" "$RST" >&2; } # dim caption under a header — explains what a pick does
+
+ask_names() { # $1 verb -> echoes picks; empty = skipped/no tty. Caller must already have list_rows'd the options.
+  local verb=$1 choice
+  [ -t 0 ] || return 0
+  read -r -p "$(printf '  %b›%b %s which? %b(names · all · ↵ skip)%b ' "$CYAN" "$RST" "$verb" "$DIM" "$RST")" choice || choice=""
+  [ -n "$choice" ] || printf '  %b↵ skipped%b\n' "$DIM" "$RST" >&2
+  printf '%s' "$choice"
+}
+
+filter_rows() { # $1 rows (name<TAB>extra), $2 space-separated names, $3 'only' keep matches / 'except' drop matches
+  local rows=$1 set=" $2 " mode=$3 name extra
+  while IFS=$'\t' read -r name extra; do
+    [ -n "$name" ] || continue
+    case "$mode" in
+      only)   case "$set" in *" $name "*) printf '%s\t%s\n' "$name" "$extra" ;; esac ;;
+      except) case "$set" in *" $name "*) ;; *) printf '%s\t%s\n' "$name" "$extra" ;; esac ;;
+    esac
+  done <<< "$rows"
+}
+
+drop_isolation_lines() { # remove every `isolation ...` line from the manifest (no-op if none)
+  local tmp line body
+  tmp=$(mktemp) || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    body="${line%%#*}"
+    set -f; set -- $body; set +f
+    [ "${1:-}" = isolation ] && continue
+    printf '%s\n' "$line"
+  done < "$MANIFEST" > "$tmp"
+  mv "$tmp" "$MANIFEST"
+}
+
+drop_manifest_entries() { # $1 directive (skill|disable), $2 space-separated names to drop, $3 'byname' matches skill sources by resolved name
+  local directive=$1 remove=" $2 " byname=${3:-} tmp line body val
+  tmp=$(mktemp) || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    body="${line%%#*}"
+    set -f; set -- $body; set +f
+    if [ "${1:-}" = "$directive" ] && [ -n "${2:-}" ]; then
+      if [ -n "$byname" ]; then val=$(skill_name "$2"); else val=$2; fi
+      case "$remove" in *" $val "*) continue ;; esac
+    fi
+    printf '%s\n' "$line"
+  done < "$MANIFEST" > "$tmp"
+  mv "$tmp" "$MANIFEST"
+}
+
+offer_global_uninstall() { # $1 rows (name<TAB>desc), $2 glyph -> prints the list once; echoes rows minus any picked for uninstall (uninstalled as a side effect)
+  local rows=$1 glyph=$2 picks name extra remaining=""
+  list_rows "$rows" "$glyph"
+  picks=$(ask_names uninstall)
+  if [ -n "$picks" ]; then
+    case " $picks " in *" all "*) picks=$(printf '%s\n' "$rows" | cut -f1 | tr '\n' ' ') ;; esac
+    for name in $picks; do cmd_uninstall "$name"; done
+    drop_manifest_entries disable "$picks"
+  fi
+  while IFS=$'\t' read -r name extra; do
+    [ -n "$name" ] || continue
+    case " $picks " in *" $name "*) continue ;; esac
+    remaining="$remaining$name"$'\t'"$extra"$'\n'
+  done <<< "$rows"
+  printf '%s' "$remaining"
 }
 
 cmd_update() {

@@ -143,7 +143,7 @@ disable some-global-skill
 
 | 命令 | 作用 |
 |---|---|
-| `skillenv init` | 在当前仓库生成 `.skillsrc` + `.envrc` |
+| `skillenv init` | 在当前仓库生成 `.skillsrc` + `.envrc`；每次运行都会先把本机所有 skillenv 托管的全局 skill 重新 fetch 并覆盖安装；有 TTY 时接着交互式复查本仓库的 skill 配置（声明的 skill、隔离模式、全局 skill 的屏蔽/启用/卸载，细节见下方示例） |
 | `skillenv allow` | 信任当前 `.skillsrc`（哈希记录在 `~/.skillenv/trust/`） |
 | `skillenv activate` | 同步 skill 并输出 env export（由 `.envrc` 调用，也可手动跑） |
 | `skillenv status` | 查看信任状态、生效模式与当前环境 |
@@ -165,6 +165,37 @@ disable some-global-skill
 
 ◆ opencode  ~/.config/opencode/skills · 0 skills
   └─ (no skills)
+```
+
+**init 每次运行：先刷新托管的全局 skill**：跑 `skillenv init` 的第一步永远是遍历本机所有全局 skill 目录，对带 `.managed-by-skillenv` 标记的逐个按其记录的来源重新 fetch（`github:`/`git:` 来源会强制拉取远端最新提交，覆盖本地缓存）并覆盖安装；手工放置的 skill（没有标记）不受影响。不管 `.skillsrc` 是新建还是已存在、有没有 TTY 都会执行；单个来源刷新失败（离线、私有仓库无权限等）只警告跳过，不影响其余步骤和后续流程。这一步复用 `skillenv install` 同一套抓取/安装逻辑，区别只是强制刷新已有缓存——目前只有 `init` 会这样做，单独重跑 `install` 不会。
+
+**init 每次运行：交互式复查配置**：刷新完成、脚手架就绪后，只要有 TTY，`skillenv init` 就会带你分段复查这个仓库的 skill 配置——不只首次，每次都跑（`.skillsrc` 已存在的团队仓库也一样，方便随时调整；无 TTY 的 agent 调用则整段跳过，不卡住等输入）。复查分四段，每段列出相关 skill、说明每个动作的影响，再让你按名字挑选（支持 `all`、回车跳过）：
+
+- **本仓库声明的 skill**（`.skillsrc` 里的 `skill` 指令）——`remove` 掉某条声明；
+- **隔离模式**——显示当前是 merge 还是 strict，问要不要切到 strict（屏蔽全部全局 skill）；
+- **本仓库已屏蔽的全局 skill**（`disable` 指令）——`enable` 恢复继承，或 `uninstall` 整机卸载；
+- **其余继承中的全局 skill**——`disable` 只在本仓库屏蔽，或 `uninstall` 整机卸载。
+
+`remove`/`enable`/`disable` 只改本仓库的 `.skillsrc`；`uninstall` 影响整机所有仓库（移入 `~/.skillenv/backup/`，永不真删）。所有改动都要之后 `skillenv allow && direnv allow` 才真正生效。列表里 `●`=当前生效/继承中、`⊘`=本仓库已屏蔽；加 `disable` 显示为 `+`、移除声明/屏蔽显示为 `-`：
+
+```
+$ skillenv init
+skillenv: created .skillsrc
+skillenv: wrote .envrc
+
+◆ isolation
+  merge (current) — inherit global skills, add repo-declared ones on top
+  › block all global skills for this repo? (y/N) n
+
+◆ other global skills on this machine
+  disable = hide in this repo · uninstall = remove from every repo
+  ● bi-query-sql            Use when: (1) 用户需要执行 SQL 或用自然语言描述查询…
+  ● eden-dev                Eden 开发环境向导…
+  › uninstall which? (names · all · ↵ skip)
+  › disable which? (names · all · ↵ skip) eden-dev
+  + disable eden-dev
+
+skillenv: next: edit .skillsrc, then run: skillenv allow && direnv allow
 ```
 
 **全局层与仓库层的分工**：仓库层是声明式的（`.skillsrc` 写什么就是什么），全局层是命令式的（`install`/`uninstall` 直接改全局目录）。两层的交互由模式决定：全局装了新 skill，merge 仓库下次 cd 自动可见（shadow 每次重算），strict 仓库不受影响；`disable` 仍可在个别仓库屏蔽全局装的 skill。`install` 不会覆盖手工放置的同名 skill（无托管标记则跳过）；`uninstall` 对任何同名全局 skill 生效，但一律移入备份而非删除。同一 skill 想更新，重跑 `install` 即可（托管标记允许覆盖）。
